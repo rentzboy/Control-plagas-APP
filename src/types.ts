@@ -40,9 +40,10 @@ export interface Revision {
 }
 
 export interface TreeRatingData {
-  rating: number; // 0, 1, 2
+  rating: number; // 0, 1, 2 or continuous value if interpolated
   note?: string;
-  photoUrl?: string; // Future use
+  photoUrl?: string;
+  isEstimated?: boolean;
 }
 
 export interface TreeRating {

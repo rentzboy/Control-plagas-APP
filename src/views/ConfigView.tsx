@@ -6,6 +6,9 @@ export default function ConfigView() {
   const [plagas, setPlagas] = useState<Plaga[]>([]);
   const [newPlaga, setNewPlaga] = useState("");
   const [exportStatus, setExportStatus] = useState("");
+  const [emailTo, setEmailTo] = useState("usuario@ejemplo.com");
+  const [showEmailInput, setShowEmailInput] = useState(false);
+  const [isRestoring, setIsRestoring] = useState(false);
 
   useEffect(() => {
     fetchPlagas();
@@ -32,10 +35,21 @@ export default function ConfigView() {
   };
 
   const exportData = async (type: "email" | "server") => {
+    if (type === "server") {
+      // Sincronización cloud (Descarga de DB)
+      window.location.href = "/api/download-db";
+      return;
+    }
+
+    if (type === "email" && !showEmailInput) {
+      setShowEmailInput(true);
+      return;
+    }
+
     setExportStatus(`Exportando a ${type}...`);
     const endpoint = type === "email" ? "/api/export/email" : "/api/export/server";
     const body = type === "email" 
-      ? { email: "usuario@ejemplo.com", data: {} } 
+      ? { email: emailTo, data: {} } 
       : { serverUrl: "https://api.externa.com/data", data: {} };
 
     const res = await fetch(endpoint, {
@@ -45,7 +59,43 @@ export default function ConfigView() {
     });
     const result = await res.json();
     setExportStatus(result.message);
-    setTimeout(() => setExportStatus(""), 3000);
+    if (type === "email") setShowEmailInput(false);
+    setTimeout(() => setExportStatus(""), 4000);
+  };
+
+  const handleRestoreDb = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!confirm("¡ATENCIÓN! Esto reemplazará COMPLETAMENTE tus datos actuales por los de la copia de seguridad. ¿Estás seguro de que quieres continuar?")) {
+      e.target.value = "";
+      return;
+    }
+
+    setIsRestoring(true);
+    setExportStatus("⏳ Restaurando base de datos...");
+    const formData = new FormData();
+    formData.append("database", file);
+
+    try {
+      const res = await fetch("/api/admin/restore-db", {
+        method: "POST",
+        body: formData,
+      });
+      const result = await res.json();
+      if (res.ok) {
+        const count = result.stats?.parcelas ?? 0;
+        setExportStatus(`✅ ¡Éxito! Base de datos restaurada (${count} parcelas). Reiniciando...`);
+        setTimeout(() => window.location.replace("/"), 3000);
+      } else {
+        setExportStatus("❌ Error: " + (result.error || "Fallo desconocido"));
+      }
+    } catch (error) {
+      setExportStatus("❌ Error de conexión al servidor");
+    } finally {
+      setIsRestoring(false);
+      e.target.value = "";
+    }
   };
 
   return (
@@ -85,21 +135,37 @@ export default function ConfigView() {
           <div className="p-2 bg-blue-100 text-blue-600 rounded-xl"><Send size={20} /></div> Canales de Exportación
         </h2>
         <div className="space-y-4">
-          <button 
-            onClick={() => exportData("email")}
-            className="w-full p-5 flex items-center gap-5 bg-white border border-slate-100 rounded-2xl shadow-sm active:bg-slate-50 transition-all group"
-          >
-            <div className="bg-blue-50 p-4 rounded-2xl text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-all transform group-hover:rotate-6">
-              <Mail size={24} />
+          {showEmailInput ? (
+            <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm animate-in fade-in duration-300">
+              <label className="text-xs font-bold text-slate-500 uppercase block mb-2">Destinatario</label>
+              <input 
+                type="email"
+                value={emailTo}
+                onChange={(e) => setEmailTo(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 outline-none focus:border-blue-500 transition-colors font-medium mb-3"
+              />
+              <div className="flex gap-2">
+                <button onClick={() => setShowEmailInput(false)} className="flex-1 p-3 text-slate-500 font-bold text-xs uppercase tracking-widest bg-slate-100 rounded-xl">Cancelar</button>
+                <button onClick={() => exportData("email")} className="flex-1 p-3 text-white font-bold text-xs uppercase tracking-widest bg-blue-600 rounded-xl shadow-md">Enviar</button>
+              </div>
             </div>
-            <div className="text-left flex-1">
-              <p className="font-bold text-slate-800">Enviar Informe Email</p>
-              <p className="text-xs font-medium text-slate-400">PDF consolidado con mapas</p>
-            </div>
-            <div className="text-slate-300 group-hover:text-blue-600 transition-colors">
-              <Globe size={18} />
-            </div>
-          </button>
+          ) : (
+            <button 
+              onClick={() => exportData("email")}
+              className="w-full p-5 flex items-center gap-5 bg-white border border-slate-100 rounded-2xl shadow-sm active:bg-slate-50 transition-all group"
+            >
+              <div className="bg-blue-50 p-4 rounded-2xl text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-all transform group-hover:rotate-6">
+                <Mail size={24} />
+              </div>
+              <div className="text-left flex-1">
+                <p className="font-bold text-slate-800">Enviar Informe Email</p>
+                <p className="text-xs font-medium text-slate-400">PDF consolidado con mapas</p>
+              </div>
+              <div className="text-slate-300 group-hover:text-blue-600 transition-colors">
+                <Globe size={18} />
+              </div>
+            </button>
+          )}
 
           <button 
             onClick={() => exportData("server")}
@@ -109,10 +175,27 @@ export default function ConfigView() {
               <Database size={24} />
             </div>
             <div className="text-left flex-1">
-              <p className="font-bold text-slate-800">Sincronización Cloud</p>
-              <p className="text-xs font-medium text-slate-400">Exportación de datos brutos SQLite</p>
+              <p className="font-bold text-slate-800">Descargar Base de Datos</p>
+              <p className="text-xs font-medium text-slate-400">Exportar SQLite (.db)</p>
             </div>
           </button>
+
+          <label className="w-full p-5 flex items-center gap-5 bg-white border border-slate-100 rounded-2xl shadow-sm active:bg-slate-50 transition-all group cursor-pointer">
+            <input 
+              type="file" 
+              accept=".db,.sqlite" 
+              className="hidden" 
+              onChange={handleRestoreDb}
+              disabled={isRestoring}
+            />
+            <div className="bg-emerald-50 p-4 rounded-2xl text-emerald-600 group-hover:bg-emerald-600 group-hover:text-white transition-all transform group-hover:rotate-12">
+              <Database size={24} />
+            </div>
+            <div className="text-left flex-1">
+              <p className="font-bold text-slate-800">Importar Base de Datos</p>
+              <p className="text-xs font-medium text-slate-400">Restaurar desde archivo .db</p>
+            </div>
+          </label>
 
           {exportStatus && (
             <div className="p-4 bg-emerald-50 text-emerald-700 rounded-2xl text-center text-sm font-bold animate-in zoom-in duration-300 border border-emerald-100">

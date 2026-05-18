@@ -3,10 +3,54 @@ import path from "path";
 import { createServer as createViteServer } from "vite";
 import Database from "better-sqlite3";
 import fs from "fs";
+import nodemailer from "nodemailer";
+
+import multer from "multer";
 
 const PORT = 3000;
+const isProd = process.env.NODE_ENV === "production" || process.argv[1]?.endsWith("server.cjs");
 const dbFile = path.resolve(process.cwd(), "agrocontrol.db");
-const db = new Database(dbFile);
+let db = new Database(dbFile);
+
+const uploadDir = "/tmp/uploads";
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+const upload = multer({ dest: uploadDir });
+
+// Mailer setup
+let transporter: nodemailer.Transporter | null = null;
+async function setupMailer() {
+  if (process.env.SMTP_HOST) {
+    transporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port: parseInt(process.env.SMTP_PORT || "587"),
+      secure: process.env.SMTP_SECURE === "true",
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS,
+      },
+    });
+  } else {
+    try {
+      const testAccount = await nodemailer.createTestAccount();
+      transporter = nodemailer.createTransport({
+        host: "smtp.ethereal.email",
+        port: 587,
+        secure: false,
+        auth: {
+          user: testAccount.user,
+          pass: testAccount.pass,
+        },
+      });
+      console.log("Ethereal testing SMTP setup complete. Check Ethereal for sent emails.");
+    } catch (e) {
+      console.log("Could not set up test mailer");
+    }
+  }
+}
+setupMailer();
+
 
 // Initialize Database
 db.exec(`
@@ -66,6 +110,15 @@ async function startServer() {
   app.use(express.json());
 
   // API Routes
+  app.get("/api/health", (req, res) => {
+    res.json({ 
+      status: "ok", 
+      env: process.env.NODE_ENV, 
+      time: new Date().toISOString(),
+      cwd: process.cwd()
+    });
+  });
+
   app.get("/api/fincas", (req, res) => {
     const fincas = db.prepare("SELECT * FROM fincas").all();
     res.json(fincas);
@@ -133,8 +186,40 @@ async function startServer() {
   });
 
   app.put("/api/parcelas/:id", (req, res) => {
-    const { nombre, grupoId } = req.body;
-    db.prepare("UPDATE parcelas SET nombre = ?, grupo_id = ? WHERE id = ?").run(nombre, grupoId, req.params.id);
+    const { id } = req.params;
+    const updates = req.body;
+    
+    // Get existing parcel
+    const existing = db.prepare("SELECT * FROM parcelas WHERE id = ?").get(id) as any;
+    if (!existing) return res.status(404).json({ error: "Parcela no encontrada" });
+
+    // Merge updates
+    const merged = {
+      nombre: updates.nombre ?? existing.nombre,
+      grupo_id: updates.hasOwnProperty('grupoId') ? updates.grupoId : existing.grupo_id,
+      finca_id: updates.fincaId ?? existing.finca_id,
+      gml_data: updates.gmlData ?? existing.gml_data,
+      puntos_json: updates.puntosJson ? JSON.stringify(updates.puntosJson) : existing.puntos_json,
+      total_arboles: updates.totalArboles ?? existing.total_arboles,
+      separacion_arboles: updates.separacionArboles ?? existing.separacion_arboles,
+      separacion_filas: updates.separacionFilas ?? existing.separacion_filas
+    };
+
+    db.prepare(`
+      UPDATE parcelas 
+      SET nombre = ?, grupo_id = ?, finca_id = ?, gml_data = ?, puntos_json = ?, total_arboles = ?, separacion_arboles = ?, separacion_filas = ? 
+      WHERE id = ?
+    `).run(
+      merged.nombre, 
+      merged.grupo_id, 
+      merged.finca_id, 
+      merged.gml_data, 
+      merged.puntos_json, 
+      merged.total_arboles, 
+      merged.separacion_arboles, 
+      merged.separacion_filas, 
+      id
+    );
     res.json({ success: true });
   });
 
@@ -161,18 +246,31 @@ async function startServer() {
 
   // Revisiones
   app.get("/api/revisiones", (req, res) => {
-    const { parcelaId } = req.query;
+    const { parcelaId, fincaId, plagaId } = req.query;
     let query = `
       SELECT r.*, f.nombre as finca_nombre, p.nombre as parcela_nombre, pl.nombre as plaga_nombre
       FROM revisiones r
-      JOIN fincas f ON r.finca_id = f.id
-      JOIN parcelas p ON r.parcela_id = p.id
-      JOIN plagas pl ON r.plaga_id = pl.id
+      INNER JOIN fincas f ON r.finca_id = f.id
+      INNER JOIN parcelas p ON r.parcela_id = p.id
+      INNER JOIN plagas pl ON r.plaga_id = pl.id
+      WHERE 1=1
     `;
-    if (parcelaId) query += " WHERE r.parcela_id = ?";
+    const params: any[] = [];
+    if (parcelaId) {
+      query += " AND r.parcela_id = ?";
+      params.push(parcelaId);
+    }
+    if (fincaId) {
+      query += " AND r.finca_id = ?";
+      params.push(fincaId);
+    }
+    if (plagaId) {
+      query += " AND r.plaga_id = ?";
+      params.push(plagaId);
+    }
     query += " ORDER BY r.fecha DESC";
     
-    const revisiones = parcelaId ? db.prepare(query).all(parcelaId) : db.prepare(query).all();
+    const revisiones = db.prepare(query).all(...params);
     res.json(revisiones);
   });
 
@@ -218,12 +316,59 @@ async function startServer() {
     res.json({ id: result.lastInsertRowid });
   });
 
-  // Export
-  app.post("/api/export/email", (req, res) => {
-    // Mock email export
-    const { email, data } = req.body;
-    console.log(`Exporting data to ${email}`);
-    res.json({ success: true, message: "Datos enviados por email (simulado)" });
+  app.put("/api/revisiones/:id", (req, res) => {
+    const { datosPuntosJson } = req.body;
+    db.prepare(`
+      UPDATE revisiones 
+      SET datos_puntos_json = ? 
+      WHERE id = ?
+    `).run(JSON.stringify(datosPuntosJson), req.params.id);
+    res.json({ success: true });
+  });
+
+  // Export y Accesos Extra
+  app.get("/api/download-db", (req, res) => {
+    if (fs.existsSync(dbFile)) {
+      res.download(dbFile, "agrocontrol.db");
+    } else {
+      res.status(404).send("Base de datos no encontrada");
+    }
+  });
+
+  app.post("/api/export/email", async (req, res) => {
+    const { email } = req.body;
+    try {
+      if (!transporter) {
+        return res.status(500).json({ error: "Servicio de email no configurado" });
+      }
+
+      // Gather some stats for the email body
+      const stats = db.prepare("SELECT count(*) as count FROM revisiones").get() as any;
+
+      const info = await transporter.sendMail({
+        from: '"AgroControl Plagas" <noreply@agrocontrol.local>',
+        to: email,
+        subject: "Informe de Exportación AgroControl",
+        text: `Se adjunta el reporte. Total de revisiones registradas: ${stats.count}`,
+        html: `<h3>Informe Generado</h3><p>Total de revisiones en el sistema: <b>${stats.count}</b>.</p>`,
+      });
+      
+      const previewUrl = nodemailer.getTestMessageUrl(info);
+      console.log("Mensaje enviado: %s", info.messageId);
+      if (previewUrl) {
+         console.log("Vista previa disponible en: %s", previewUrl);
+      }
+      
+      res.json({ 
+        success: true, 
+        message: previewUrl 
+          ? `Correo enviado (simulado). Mira la consola para URL.` 
+          : `Datos enviados exitosamente a ${email}` 
+      });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: "Error enviando correo" });
+    }
   });
 
   app.post("/api/export/server", (req, res) => {
@@ -233,18 +378,68 @@ async function startServer() {
     res.json({ success: true, message: "Datos enviados al servidor (simulado)" });
   });
 
-  // Vite middleware for development
-  if (process.env.NODE_ENV !== "production") {
+  app.post("/api/admin/restore-db", upload.single("database"), (req, res) => {
+    if (!req.file) return res.status(400).json({ error: "No se subió ningún archivo" });
+
+    try {
+      const stats = fs.statSync(req.file.path);
+      console.log(`Restoring database from: ${req.file.path} (Size: ${stats.size} bytes)`);
+      
+      if (stats.size === 0) {
+        throw new Error("El archivo subido está vacío");
+      }
+
+      // Close current connection
+      db.close();
+      
+      // Reemplazar archivo
+      fs.copyFileSync(req.file.path, dbFile);
+      
+      // Reiniciar conexión
+      db = new Database(dbFile);
+      
+      // Verificar si hay datos inmediatamente
+      const count = db.prepare("SELECT count(*) as count FROM parcelas").get() as any;
+      console.log(`Database restored. Parcelas count: ${count?.count}`);
+      
+      // Limpiar temporal
+      fs.unlinkSync(req.file.path);
+      
+      res.json({ 
+        success: true, 
+        message: "Base de datos restaurada correctamente",
+        stats: { parcelas: count?.count }
+      });
+    } catch (e: any) {
+      console.error("Error restoring database:", e);
+      // Intentar reabrir la conexión si falla
+      try { if (!db.open) db = new Database(dbFile); } catch(re) {}
+      res.status(500).json({ error: "Fallo al restaurar la base de datos: " + (e.message || "Error desconocido") });
+    }
+  });
+
+  // Vite middleware for development or fallback to static for production
+  
+  if (!isProd) {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
+    // Production path resolution
+    const distPath = path.join(process.cwd(), "dist");
+    
+    console.log(`Serving static files from: ${distPath}`);
     app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+    
+    app.get("*", (req, res) => {
+      const indexPath = path.join(distPath, "index.html");
+      if (fs.existsSync(indexPath)) {
+        res.sendFile(indexPath);
+      } else {
+        res.status(404).send("Application files not found. Please try rebuilding.");
+      }
     });
   }
 

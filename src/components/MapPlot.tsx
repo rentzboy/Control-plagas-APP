@@ -20,13 +20,15 @@ interface MapPlotProps {
   onSelectTree?: (index: number) => void;
   onLongPressParcela?: () => void;
   onDoubleTapParcela?: (parcela: any) => void;
-  ratings?: { [key: number]: any }; // Heatmap data
+  ratings?: { [key: number]: any }; 
+  showHeatmap?: boolean;
 }
 
 function DeckGLOverlay({ layers }: { layers: any[] }) {
   const map = useMap();
   const overlayRef = useRef<GoogleMapsOverlay | null>(null);
 
+  // Initialize overlay instance
   useEffect(() => {
     if (!overlayRef.current) {
       overlayRef.current = new GoogleMapsOverlay({ layers });
@@ -35,43 +37,36 @@ function DeckGLOverlay({ layers }: { layers: any[] }) {
     }
   }, [layers]);
 
+  // Handle map attachment
   useEffect(() => {
-    if (!map) return;
     const overlay = overlayRef.current;
-    if (!overlay) return;
+    if (!map || !overlay) return;
     
-    // The error "projection is null" usually happens when the map isn't 
-    // fully initialized with a center/zoom yet.
-    // We'll wrap it in a slightly safer initialization check.
-    const initializeOverlay = () => {
+    // Use a small delay to ensure map projection is ready
+    const timerId = setTimeout(() => {
       try {
+        // Double check map and projection availability
         if (map.getProjection()) {
           overlay.setMap(map);
         } else {
-          // Retry later if projection is not yet available
-          const listener = map.addListener('projection_changed', () => {
-            overlay.setMap(map);
-            listener.remove();
+          // If still no projection, wait for next idle
+          const listener = map.addListener('idle', () => {
+             overlay.setMap(map);
+             listener.remove();
           });
-          // Fallback if event doesn't fire
-          setTimeout(() => {
-            if (!overlay.getMap()) overlay.setMap(map);
-          }, 100);
         }
       } catch (e) {
-        console.warn("DeckGL: Error adding overlay", e);
+        console.warn("DeckGL attachment failed:", e);
       }
-    };
-
-    initializeOverlay();
+    }, 200);
 
     return () => {
+      clearTimeout(timerId);
       if (overlay) {
         try {
           overlay.setMap(null);
         } catch (e: any) {
-          if (e.message?.includes('removeAllListeners')) return;
-          console.debug("DeckGL cleanup info:", e.message);
+          // Ignore release errors
         }
       }
     };
@@ -87,18 +82,31 @@ export default function MapPlot({
   onSelectTree, 
   onLongPressParcela,
   onDoubleTapParcela,
-  ratings = {}
-}: MapPlotProps) {
+  ratings = {},
+  showHeatmap = false,
+  focusLocation
+}: MapPlotProps & { focusLocation?: Point | null }) {
   const [center, setCenter] = useState<Point>({ lat: 40.4168, lng: -3.7038 }); 
   const [zoom, setZoom] = useState(6);
 
   useEffect(() => {
+    if (focusLocation) {
+      setCenter(focusLocation);
+      setZoom(18);
+    }
+  }, [focusLocation]);
+
+  useEffect(() => {
     if (parcelas.length > 0) {
       const first = parcelas[0];
-      const exterior = typeof first.gml_data === 'string' ? JSON.parse(first.gml_data) : first.exterior;
-      if (exterior && exterior.length > 0) {
-        setCenter({ lat: exterior[0].lat, lng: exterior[0].lng });
-        setZoom(18);
+      try {
+        const exterior = typeof first.gml_data === 'string' ? JSON.parse(first.gml_data) : first.exterior;
+        if (exterior && Array.isArray(exterior) && exterior.length > 0) {
+          setCenter({ lat: exterior[0].lat, lng: exterior[0].lng });
+          setZoom(18);
+        }
+      } catch (e) {
+        console.error("Error parsing parcela data for map center", e);
       }
     }
   }, [parcelas]);
@@ -109,31 +117,19 @@ export default function MapPlot({
       id: 'parcelas-outline',
       data: parcelas,
       getPath: (d: any) => {
-        const ext = typeof d.gml_data === 'string' ? JSON.parse(d.gml_data) : d.exterior;
-        return ext.map((p: Point) => [p.lng, p.lat]);
+        try {
+          const ext = typeof d.gml_data === 'string' ? JSON.parse(d.gml_data) : (d.exterior || []);
+          if (!Array.isArray(ext)) return [];
+          return ext.map((p: any) => [p.lng, p.lat]) as [number, number][];
+        } catch (e) {
+          return [];
+        }
       },
       getColor: [16, 185, 129],
-      widthMinPixels: 2,
-    }),
-    new ScatterplotLayer({
-      id: 'tree-points',
-      data: treePoints.map((p, i) => ({ ...p, index: i })),
-      getPosition: (d: any) => [d.lng, d.lat],
-      getRadius: 0.8,
-      getFillColor: (d: any) => {
-        const ratingData = ratings[d.index];
-        const rating = typeof ratingData === 'object' ? ratingData.rating : ratingData;
-        if (rating === 0) return [16, 185, 129]; 
-        if (rating === 1) return [251, 191, 36]; 
-        if (rating === 2) return [239, 68, 68]; 
-        return [148, 163, 184]; 
-      },
-      pickable: true,
-      onClick: (info) => {
-        if (onSelectTree && info.object) {
-          onSelectTree(info.object.index);
-        }
-      }
+      widthMinPixels: 3,
+      widthScale: 1,
+      rounded: true,
+      pickable: true
     }),
     new HeatmapLayer({
       id: 'pest-heatmap',
@@ -143,18 +139,53 @@ export default function MapPlot({
         return { ...p, weight: rating ?? -1 };
       }),
       getPosition: (d: any) => [d.lng, d.lat],
-      getWeight: (d: any) => d.weight === -1 ? 0 : (d.weight === 0 ? 0.1 : (d.weight === 1 ? 0.6 : 1)),
-      radiusPixels: 35,
-      visible: Object.keys(ratings).length > 0
+      getWeight: (d: any) => {
+        if (d.weight === -1 || d.weight === undefined) return 0;
+        // Continuous scale for interpolated values
+        // 0 (Sano) -> 0.1
+        // 1 (Leve) -> 0.6
+        // 2 (Grave) -> 1.0
+        if (d.weight <= 1) return 0.1 + (d.weight * 0.5);
+        return 0.6 + (Math.min(d.weight - 1, 1) * 0.4);
+      },
+      radiusPixels: 40,
+      visible: showHeatmap && Object.keys(ratings).length > 0
+    }),
+    new ScatterplotLayer({
+      id: 'tree-points',
+      data: treePoints.map((p, i) => ({ ...p, index: i })),
+      getPosition: (d: any) => [d.lng, d.lat],
+      getRadius: 2.5,
+      getFillColor: (d: any) => {
+        const ratingData = ratings[d.index];
+        const rating = typeof ratingData === 'object' ? ratingData.rating : ratingData;
+        
+        if (rating === undefined || rating === -1) return [148, 163, 184, 180];
+        
+        // Colors for interpolated values
+        if (rating <= 0.5) return [16, 185, 129, 220]; // Greenish
+        if (rating <= 1.5) return [251, 191, 36, 220]; // Amber
+        return [239, 68, 68, 220]; // Red
+      },
+      stroked: true,
+      getLineColor: [255, 255, 255, 200],
+      lineWidthMinPixels: 1,
+      pickable: true,
+      onClick: (info) => {
+        if (onSelectTree && info.object) {
+          onSelectTree(info.object.index);
+        }
+      }
     }),
     userLocation ? new ScatterplotLayer({
       id: 'user-location',
       data: [userLocation],
       getPosition: d => [d.lng, d.lat],
-      getRadius: 1.5,
+      getRadius: 6,
       getFillColor: [59, 130, 246],
       getLineColor: [255, 255, 255],
-      lineWidthMinPixels: 3,
+      lineWidthMinPixels: 2,
+      stroked: true
     }) : null
   ].filter(Boolean), [parcelas, treePoints, userLocation, ratings, onSelectTree]);
 

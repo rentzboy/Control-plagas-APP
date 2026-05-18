@@ -1,30 +1,25 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, Suspense, lazy } from "react";
 import { BrowserRouter, Routes, Route, useNavigate, useLocation } from "react-router-dom";
 import { 
-  Plus, 
   Map as MapIcon, 
   Settings, 
   Layers, 
   ClipboardCheck, 
   Home,
-  Trash2,
-  Edit2,
-  ChevronRight,
-  Send,
-  Upload,
   LayoutDashboard
 } from "lucide-react";
-import { motion, AnimatePresence } from "motion/react";
-
-import DashboardView from "./views/DashboardView";
-import FincasView from "./views/FincasView";
-import ParcelasView from "./views/ParcelasView";
-import GruposView from "./views/GruposView";
-import RevisionesView from "./views/RevisionesView";
-import ConfigView from "./views/ConfigView";
 import { APIProvider } from "@vis.gl/react-google-maps";
 
-const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_PLATFORM_KEY || "";
+const DashboardView = lazy(() => import("./views/DashboardView"));
+const FincasView = lazy(() => import("./views/FincasView"));
+const ParcelasView = lazy(() => import("./views/ParcelasView"));
+const GruposView = lazy(() => import("./views/GruposView"));
+const RevisionesView = lazy(() => import("./views/RevisionesView"));
+const ConfigView = lazy(() => import("./views/ConfigView"));
+
+const API_KEY = process.env.GOOGLE_MAPS_PLATFORM_KEY || '';
+
+const hasValidKey = Boolean(API_KEY) && API_KEY !== 'YOUR_API_KEY';
 
 function Navbar() {
   const navigate = useNavigate();
@@ -62,10 +57,41 @@ function Navbar() {
   );
 }
 
+const SuspenseFallback = () => (
+  <div className="flex items-center justify-center min-h-[50vh]">
+    <div className="w-8 h-8 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
+  </div>
+);
+
 export default function App() {
+  if (!hasValidKey) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-slate-50 font-sans p-6 text-center">
+        <div className="max-w-sm">
+          <div className="w-16 h-16 bg-emerald-100 text-emerald-700 rounded-2xl flex items-center justify-center mx-auto mb-6">
+            <MapIcon size={32} />
+          </div>
+          <h2 className="text-2xl font-bold text-slate-800 mb-4">Google Maps API Key Required</h2>
+          <p className="text-slate-500 text-sm mb-8 leading-relaxed">
+            Para ver los mapas de catastro y calor, debe configurar su clave de API.
+          </p>
+          <div className="text-left space-y-4 bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Instrucciones:</p>
+            <ol className="text-xs text-slate-600 space-y-3 list-decimal list-inside font-medium">
+              <li>Open <strong>Settings</strong> (⚙️ gear icon)</li>
+              <li>Select <strong>Secrets</strong></li>
+              <li>Type <code>GOOGLE_MAPS_PLATFORM_KEY</code></li>
+              <li>Paste your API key and press Enter</li>
+            </ol>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <BrowserRouter>
-      <APIProvider apiKey={GOOGLE_MAPS_API_KEY}>
+      <APIProvider apiKey={API_KEY} version="weekly">
         <div className="min-h-screen bg-slate-50 pb-24 font-sans text-slate-900">
           <header className="bg-white border-b border-slate-200 h-20 px-6 flex items-center justify-between sticky top-0 z-40">
             <div>
@@ -78,14 +104,16 @@ export default function App() {
           </header>
 
           <main className="max-w-md mx-auto">
-            <Routes>
-              <Route path="/" element={<DashboardView />} />
-              <Route path="/fincas" element={<FincasView />} />
-              <Route path="/parcelas" element={<ParcelasView />} />
-              <Route path="/grupos" element={<GruposView />} />
-              <Route path="/revisiones" element={<RevisionesView />} />
-              <Route path="/config" element={<ConfigView />} />
-            </Routes>
+            <Suspense fallback={<SuspenseFallback />}>
+              <Routes>
+                <Route path="/" element={<DashboardView />} />
+                <Route path="/fincas" element={<FincasView />} />
+                <Route path="/parcelas" element={<ParcelasView />} />
+                <Route path="/grupos" element={<GruposView />} />
+                <Route path="/revisiones" element={<RevisionesView />} />
+                <Route path="/config" element={<ConfigView />} />
+              </Routes>
+            </Suspense>
           </main>
 
           <Navbar />

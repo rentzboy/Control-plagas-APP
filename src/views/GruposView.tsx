@@ -50,43 +50,53 @@ export default function GruposView() {
     setSelectedParcelas(currentParcelas);
   };
 
+  const [isSaving, setIsSaving] = useState(false);
+
   const handleSaveEdit = async () => {
     if (!editingGrupo || !editGrupoNombre) return;
+    setIsSaving(true);
 
-    // Update group name
-    await fetch(`/api/grupos/${editingGrupo.id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ nombre: editGrupoNombre }),
-    });
+    try {
+      // Update group name
+      await fetch(`/api/grupos/${editingGrupo.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nombre: editGrupoNombre }),
+      });
 
-    // Update parcelas associations
-    // 1. Get all parcelas for this finca
-    const fincaParcelas = parcelas.filter(p => p.finca_id === editingGrupo.finca_id);
-    
-    for (const p of fincaParcelas) {
-      const isInSelected = selectedParcelas.includes(p.id);
-      const isCurrentlyInGroup = p.grupo_id === editingGrupo.id;
+      // Update parcelas associations
+      // 1. Get all parcelas for this finca
+      const fincaParcelas = parcelas.filter(p => p.finca_id === editingGrupo.finca_id);
+      
+      for (const p of fincaParcelas) {
+        const isInSelected = selectedParcelas.includes(p.id);
+        const isCurrentlyInGroup = p.grupo_id === editingGrupo.id;
 
-      if (isInSelected && !isCurrentlyInGroup) {
-        // Add to group
-        await fetch(`/api/parcelas/${p.id}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ nombre: p.nombre, grupoId: editingGrupo.id }),
-        });
-      } else if (!isInSelected && isCurrentlyInGroup) {
-        // Remove from group
-        await fetch(`/api/parcelas/${p.id}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ nombre: p.nombre, grupoId: null }),
-        });
+        if (isInSelected && !isCurrentlyInGroup) {
+          // Add to group (Partial update is now safe)
+          await fetch(`/api/parcelas/${p.id}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ grupoId: editingGrupo.id }),
+          });
+        } else if (!isInSelected && isCurrentlyInGroup) {
+          // Remove from group (Partial update is now safe)
+          await fetch(`/api/parcelas/${p.id}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ grupoId: null }),
+          });
+        }
       }
-    }
 
-    setEditingGrupo(null);
-    fetchData();
+      setEditingGrupo(null);
+      await fetchData();
+    } catch (error) {
+      console.error("Error saving group:", error);
+      alert("Error al guardar los cambios del grupo.");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const handleDelete = async (id: number) => {
@@ -106,7 +116,7 @@ export default function GruposView() {
     <div className="p-6">
       <div className="flex justify-between items-center mb-8">
         <div>
-          <h2 className="text-2xl font-bold text-slate-800 tracking-tight">Estructura Grupal</h2>
+          <h2 className="text-2xl font-bold text-slate-800 tracking-tight">Grupos de parcelas</h2>
           <p className="text-xs text-slate-400 font-medium">Organice sus parcelas por sectores</p>
         </div>
         {!isAdding && !editingGrupo && (
@@ -170,34 +180,57 @@ export default function GruposView() {
             <div className="space-y-2">
               <label className="label-caps px-1">Gestionar Parcelas</label>
               <div className="max-h-48 overflow-y-auto space-y-2 pr-1">
-                {parcelas.filter(p => p.finca_id === editingGrupo.finca_id).map(parcela => (
-                  <div 
-                    key={parcela.id} 
-                    onClick={() => toggleParcela(parcela.id)}
-                    className={`p-3 rounded-xl border flex items-center justify-between cursor-pointer transition-all ${
-                      selectedParcelas.includes(parcela.id) 
-                        ? 'border-emerald-200 bg-emerald-50' 
-                        : 'border-slate-100 bg-white hover:bg-slate-50'
-                    }`}
-                  >
-                    <span className={`text-sm font-bold ${selectedParcelas.includes(parcela.id) ? 'text-emerald-700' : 'text-slate-600'}`}>
-                      {parcela.nombre}
-                    </span>
-                    {selectedParcelas.includes(parcela.id) && (
-                      <Check size={16} className="text-emerald-600" />
-                    )}
-                  </div>
-                ))}
+                {parcelas.filter(p => p.finca_id === editingGrupo.finca_id).map(parcela => {
+                  const otherGroup = parcela.grupo_id && parcela.grupo_id !== editingGrupo.id 
+                    ? grupos.find(g => g.id === parcela.grupo_id)
+                    : null;
+                  
+                  return (
+                    <div 
+                      key={parcela.id} 
+                      onClick={() => !isSaving && toggleParcela(parcela.id)}
+                      className={`p-3 rounded-xl border flex items-center justify-between cursor-pointer transition-all ${
+                        selectedParcelas.includes(parcela.id) 
+                          ? 'border-emerald-200 bg-emerald-50' 
+                          : 'border-slate-100 bg-white hover:bg-slate-50'
+                      } ${isSaving ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    >
+                      <div className="flex flex-col">
+                        <span className={`text-sm font-bold ${selectedParcelas.includes(parcela.id) ? 'text-emerald-700' : 'text-slate-600'}`}>
+                          {parcela.nombre}
+                        </span>
+                        {otherGroup && !selectedParcelas.includes(parcela.id) && (
+                          <span className="text-[10px] text-slate-400">En: {otherGroup.nombre}</span>
+                        )}
+                      </div>
+                      {selectedParcelas.includes(parcela.id) && (
+                        <Check size={16} className="text-emerald-600" />
+                      )}
+                    </div>
+                  );
+                })}
                 {parcelas.filter(p => p.finca_id === editingGrupo.finca_id).length === 0 && (
                   <div className="text-center py-4 text-xs text-slate-400">No hay parcelas creadas en esta finca</div>
                 )}
               </div>
             </div>
           </div>
-
+ 
           <div className="flex justify-end gap-3 pt-2">
-            <button onClick={() => setEditingGrupo(null)} className="px-5 py-2 text-slate-400 font-bold text-xs uppercase">Cancelar</button>
-            <button onClick={handleSaveEdit} className="button-emerald text-xs uppercase px-8">Guardar Cambios</button>
+            <button 
+              onClick={() => setEditingGrupo(null)} 
+              disabled={isSaving}
+              className="px-5 py-2 text-slate-400 font-bold text-xs uppercase disabled:opacity-30"
+            >
+              Cancelar
+            </button>
+            <button 
+              onClick={handleSaveEdit} 
+              disabled={isSaving}
+              className="button-emerald text-xs uppercase px-8 disabled:opacity-50"
+            >
+              {isSaving ? "Guardando..." : "Guardar Cambios"}
+            </button>
           </div>
         </div>
       )}

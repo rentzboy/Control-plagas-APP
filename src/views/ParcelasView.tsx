@@ -8,6 +8,7 @@ export default function ParcelasView() {
   const [grupos, setGrupos] = useState<GrupoParcelas[]>([]);
   const [parcelas, setParcelas] = useState<Parcela[]>([]);
   
+  const [editingParcela, setEditingParcela] = useState<Parcela | null>(null);
   const [isAdding, setIsAdding] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [currentStep, setCurrentStep] = useState(1); // 1: Upload, 2: Config, 3: Success
@@ -74,6 +75,29 @@ export default function ParcelasView() {
     reader.readAsText(file);
   };
 
+  const handleEdit = (parcela: Parcela) => {
+    setEditingParcela(parcela);
+    setSelectedFinca(parcela.finca_id.toString());
+    setSelectedGrupo(parcela.grupo_id?.toString() || "");
+    setManualNombre(parcela.nombre);
+    setTreeConfig({
+      totalArboles: parcela.total_arboles,
+      separacionArboles: parcela.separacion_arboles,
+      separacionFilas: parcela.separacion_filas
+    });
+    
+    // When editing, we don't have new "parsedParcelas" but we can reconstruct it from gmlData
+    try {
+      const exterior = typeof parcela.gml_data === 'string' ? JSON.parse(parcela.gml_data) : parcela.gml_data;
+      setParsedParcelas([{ exterior, nombre: parcela.nombre }]);
+    } catch (e) {
+      setParsedParcelas([]);
+    }
+    
+    setCurrentStep(2);
+    setIsAdding(true);
+  };
+
   const handleSaveParcelas = async () => {
     const newErrors = {
       finca: !selectedFinca,
@@ -108,8 +132,8 @@ export default function ParcelasView() {
           ? manualNombre 
           : `${manualNombre} (${i + 1})`;
 
-        const response = await fetch("/api/parcelas", {
-          method: "POST",
+        const response = await fetch(editingParcela ? `/api/parcelas/${editingParcela.id}` : "/api/parcelas", {
+          method: editingParcela ? "PUT" : "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             fincaId: parseInt(selectedFinca),
@@ -129,6 +153,7 @@ export default function ParcelasView() {
       }
 
       setIsAdding(false);
+      setEditingParcela(null);
       setCurrentStep(1);
       setParsedParcelas([]);
       setSelectedFinca("");
@@ -170,8 +195,10 @@ export default function ParcelasView() {
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-6 z-[100] overflow-y-auto">
           <div className="bg-white rounded-[40px] w-full max-w-sm p-8 shadow-2xl animate-in slide-in-from-bottom-10 duration-500 border border-white/20">
              <div className="w-16 h-1 bg-slate-100 rounded-full mx-auto mb-6"></div>
-             <h3 className="text-2xl font-bold text-slate-800 mb-2">Nueva Parcela</h3>
-             <p className="text-xs text-slate-400 mb-8 font-medium">Paso {currentStep} de 2 — Configuración SIG</p>
+             <h3 className="text-2xl font-bold text-slate-800 mb-2">{editingParcela ? "Editar Parcela" : "Nueva Parcela"}</h3>
+             <p className="text-xs text-slate-400 mb-8 font-medium">
+               {editingParcela ? "Ajuste la configuración de la parcela" : `Paso ${currentStep} de 2 — Configuración SIG`}
+             </p>
              
              {currentStep === 1 && (
                <div className="space-y-6">
@@ -192,7 +219,21 @@ export default function ParcelasView() {
                      </>
                    )}
                  </div>
-                 <button onClick={() => setIsAdding(false)} className="w-full py-4 text-slate-400 font-bold text-xs uppercase tracking-widest">Descartar</button>
+                 <button 
+                    onClick={() => {
+                      setIsAdding(false);
+                      setEditingParcela(null);
+                      setCurrentStep(1);
+                      setParsedParcelas([]);
+                      setSelectedFinca("");
+                      setSelectedGrupo("");
+                      setManualNombre("");
+                      setErrors({});
+                    }} 
+                    className="w-full py-4 text-slate-400 font-bold text-xs uppercase tracking-widest"
+                  >
+                    Descartar
+                  </button>
                </div>
              )}
 
@@ -279,11 +320,19 @@ export default function ParcelasView() {
 
                  <div className="flex gap-4 pt-4">
                    <button 
-                      onClick={() => setCurrentStep(1)} 
+                      onClick={() => {
+                        if (editingParcela) {
+                           setIsAdding(false);
+                           setEditingParcela(null);
+                           setCurrentStep(1);
+                        } else {
+                           setCurrentStep(1);
+                        }
+                      }} 
                       disabled={isSaving}
                       className="flex-1 py-4 text-slate-400 font-bold text-xs uppercase disabled:opacity-50"
                     >
-                      Atrás
+                      {editingParcela ? "Cancelar" : "Atrás"}
                     </button>
                    <button 
                       onClick={handleSaveParcelas} 
@@ -328,12 +377,20 @@ export default function ParcelasView() {
                 </div>
               </div>
             </div>
-            <button 
-              onClick={() => handleDelete(parcela.id)}
-              className="p-3 text-slate-200 hover:text-red-600 bg-slate-50 hover:bg-red-50 rounded-2xl transition-all"
-            >
-              <Trash2 size={18} />
-            </button>
+            <div className="flex items-center gap-2">
+              <button 
+                onClick={() => handleEdit(parcela)}
+                className="p-3 text-slate-400 hover:text-emerald-600 bg-slate-50 hover:bg-emerald-50 rounded-2xl transition-all"
+              >
+                <Edit2 size={18} />
+              </button>
+              <button 
+                onClick={() => handleDelete(parcela.id)}
+                className="p-3 text-slate-200 hover:text-red-600 bg-slate-50 hover:bg-red-50 rounded-2xl transition-all"
+              >
+                <Trash2 size={18} />
+              </button>
+            </div>
           </div>
         ))}
       </div>
