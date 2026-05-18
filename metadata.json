@@ -1,0 +1,10 @@
+{
+  "name": "AgroControl Plagas",
+  "description": "Aplicación para el control de plagas en parcelas agrícolas con gestión de fincas, parcelas, revisiones y mapas de calor.",
+  "requestFramePermissions": [
+    "geolocation"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
