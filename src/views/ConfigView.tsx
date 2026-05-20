@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Plus, Bug, Send, Mail, Globe, Database, Trash2 } from "lucide-react";
+import { Plus, Bug, Send, Mail, Globe, Database, Trash2, Smartphone } from "lucide-react";
 import { Plaga } from "../types";
 
 export default function ConfigView() {
@@ -9,6 +9,25 @@ export default function ConfigView() {
   const [emailTo, setEmailTo] = useState("usuario@ejemplo.com");
   const [showEmailInput, setShowEmailInput] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+
+  useEffect(() => {
+    const handler = (e: any) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+    };
+    window.addEventListener('beforeinstallprompt', handler);
+    return () => window.removeEventListener('beforeinstallprompt', handler);
+  }, []);
+
+  const handleInstallClick = async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === 'accepted') {
+      setDeferredPrompt(null);
+    }
+  };
 
   useEffect(() => {
     fetchPlagas();
@@ -196,6 +215,43 @@ export default function ConfigView() {
               <p className="text-xs font-medium text-slate-400">Restaurar desde archivo .db</p>
             </div>
           </label>
+
+          <section className="bg-emerald-50/50 p-6 rounded-3xl border border-emerald-100/50 space-y-4">
+            <div className="flex items-center gap-3 text-emerald-700">
+              <div className="bg-emerald-100 p-2 rounded-xl">
+                <Smartphone size={20} />
+              </div>
+              <p className="font-bold text-sm uppercase tracking-wider">Instalación en Móvil</p>
+            </div>
+
+            {deferredPrompt ? (
+              <button 
+                onClick={handleInstallClick}
+                className="w-full p-4 bg-emerald-600 text-white rounded-2xl font-bold flex items-center justify-center gap-3 shadow-lg shadow-emerald-200 active:scale-95 transition-all"
+              >
+                <Plus size={20} />
+                Instalar AgroControl SIG
+              </button>
+            ) : (
+              <div className="space-y-4">
+                <div className="bg-white/60 p-4 rounded-2xl border border-white space-y-3">
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    Si no ves el botón de instalar, puedes hacerlo manualmente:
+                  </p>
+                  <ul className="text-xs text-slate-500 space-y-2">
+                    <li className="flex items-start gap-2">
+                      <span className="bg-emerald-100 text-emerald-700 w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 mt-0.5">1</span>
+                      <span>En <b>Chrome</b>: Pulsa los 3 puntos (⋮) y selecciona <b>"Instalar aplicación"</b> o "Añadir a pantalla de inicio".</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="bg-emerald-100 text-emerald-700 w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 mt-0.5">2</span>
+                      <span>En <b>Safari (iPhone)</b>: Pulsa el botón de compartir (↑) y selecciona <b>"Añadir a la pantalla de inicio"</b>.</span>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+            )}
+          </section>
 
           {exportStatus && (
             <div className="p-4 bg-emerald-50 text-emerald-700 rounded-2xl text-center text-sm font-bold animate-in zoom-in duration-300 border border-emerald-100">

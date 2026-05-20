@@ -119,6 +119,11 @@ async function startServer() {
     });
   });
 
+  // Serve public folder explicitly in dev mode as well
+  if (!isProd) {
+    app.use(express.static(path.join(process.cwd(), 'public')));
+  }
+
   app.get("/api/fincas", (req, res) => {
     const fincas = db.prepare("SELECT * FROM fincas").all();
     res.json(fincas);
